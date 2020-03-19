@@ -1,7 +1,7 @@
 void drawNews(){
   
   static boolean firstRun = true;
- 
+  display.setFont();
     
   if(firstRun == true){
 
@@ -24,7 +24,13 @@ void drawNews(){
       
       if (httpCode > 0) { //Check for the returning code
           String payload = http.getString();
-          //Serial.println(payload);
+          payload.replace("ü", String(char(129))); //ü
+          payload.replace("ä", String(char(132))); //ä
+          payload.replace("ö", String(char(148))); //ö
+          payload.replace("Ü", String(char(154))); //Ü
+          payload.replace("Ä", String(char(142))); //Ä
+          payload.replace("Ö", String(char(153))); //Ö
+          payload.replace("ß", String(char(224))); //ß
       
           for(int i = 0; i < 20; i++){
             while(1){
@@ -60,14 +66,14 @@ void drawNews(){
   }
 
 
-  
+  display.setFont();
   drawTaskBar();
   display.refresh();
 
   firstRun = false;
 
   if(buttonA.wasPressed()){
-    currentPage = 1; // back to menu
+    currentPage = 0; // back to menu
     firstRun = true;
   }
   

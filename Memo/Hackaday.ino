@@ -67,7 +67,7 @@ void drawHackaday(){
   firstRun = false;
 
   if(buttonA.wasPressed()){
-    currentPage = 1; // back to menu
+    currentPage = 0; // back to menu
     firstRun = true;
   }
   

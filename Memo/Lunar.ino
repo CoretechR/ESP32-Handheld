@@ -17,8 +17,8 @@ void drawLunar(){
   if(firstRun == true){
     vx = vy = vrot = 0;
     rot = -PI/2;
-    posx = display.width()/2;
-    posy = display.height()/2;
+    posx = WIDTH/2;
+    posy = HEIGHT/2;
     display.fillScreen(WHITE);
   }
 
@@ -46,16 +46,22 @@ void drawLunar(){
     rPos[i][0] = posx + rPos[i][0]*cos(rot) - rPos[i][1]*sin(rot);
     rPos[i][1] = posy + ytemp*sin(rot) + rPos[i][1]*cos(rot);
   }
-  display.fillRect(rPos[0][0]-15, rPos[0][1]-15, 30, 30, WHITE);
+  display.fillScreen(WHITE);
   display.fillTriangle(rPos[0][0], rPos[0][1], rPos[1][0], rPos[1][1], rPos[2][0], rPos[2][1], BLACK);
+  //display.fillRect(0, 0, 400, 240, WHITE);
   
   drawTaskBar();
+  //int refreshtime = millis();
   display.refresh();
-
+  //refreshtime = millis() - refreshtime;
+  //Serial.print("refresh: ");
+  //Serial.print(refreshtime);
+  //Serial.print("  ");
+  
   firstRun = false;
 
   if(buttonA.wasPressed()){
-    currentPage = 1; // back to menu
+    currentPage = 0; // back to menu
     firstRun = true;
   }
   

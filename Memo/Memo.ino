@@ -1,9 +1,13 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SharpMem.h>
+#include <Fonts/FreeSansBold9pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
+
 #include <Button.h> // https://github.com/JChristensen/Button
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
 #include "esp32/ulp.h"
+#include "bmp.h"
 
 #include "ulp_main.h"
 #include "ulptool.h"
@@ -11,9 +15,14 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <NTPClient.h>
+
+#include "I2Cdev.h"
+#include "MPU6050.h"
+#include "Wire.h"
+MPU6050 mpu;
  
-const char* ssid = "your_ssid";
-const char* password = "your_password";
+const char* ssid = "yourssid";
+const char* password = "yourpassword";
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -21,9 +30,16 @@ NTPClient timeClient(ntpUDP);
 #define BLACK 0
 #define WHITE 1
 
+#define WIDTH 400
+#define HEIGHT 240
+
 #define SHARP_SCK  14
 #define SHARP_MOSI 13
 #define SHARP_SS   15
+
+#define I2C_SDA 26
+#define I2C_SCL 25
+#define INTP 34
 
 #define ADC_BAT 39
 #define CRG_STAT 36
@@ -35,6 +51,9 @@ NTPClient timeClient(ntpUDP);
 #define LBUT 22
 #define RBUT 18
 #define CBUT 21
+#define SBUT 35
+
+//#define SKIPBOOTSCREEN
 
 //Pushbuttons connected to GPIO32 & GPIO33 for wakeup
 #define BUTTON_PIN_BITMASK 0x300000000
@@ -49,14 +68,14 @@ Button buttonDown(DBUT, true, true, 5);
 Button buttonLeft(LBUT, true, true, 5);
 Button buttonRight(RBUT, true, true, 5);
 Button buttonC(CBUT, true, true, 5);
+Button buttonShoulder(SBUT, false, false, 5);
 
 TaskHandle_t Task1;
 TaskHandle_t Task2;
 
 Adafruit_SharpMem display(SHARP_SCK, SHARP_MOSI, SHARP_SS, 400, 240);
 
-
-int currentPage = 1; // main menu
+int currentPage = 0; // main menu
 
 unsigned long fpsCounter = 0;
 float fps = 0;
@@ -69,6 +88,12 @@ boolean batteryConnected = true;
 
 struct tm now;
 RTC_DATA_ATTR int syncCounter = 0; //count wakeups for time sync (RTC memory is not erased during sleep)
+
+float mouseX, mouseY;
+
+int16_t gx, gy, gz;
+float sensX = 0.0022;
+float sensY = 0.0018;
 
 static void init_ulp_program() 
 {
@@ -85,6 +110,8 @@ static void init_ulp_program()
 
 void enterSleep(){
   //Serial.printf("Entering deep sleep\n\n");
+  /* Put MPU6050 into sleep mode */
+  mpu.setSleepEnabled(true);
   /* Start the ULP program */
   ESP_ERROR_CHECK( ulp_run((&ulp_entry - RTC_SLOW_MEM) / sizeof(uint32_t)));
   ESP_ERROR_CHECK( esp_sleep_enable_ulp_wakeup() );
@@ -119,7 +146,7 @@ void setup(void){
   display.begin();
   display.clearDisplay();
   display.setRotation(0); //Tetris?
-  
+
   Serial.begin(115200);
   Serial.print("Wakeup cause: ");
   if(cause == ESP_SLEEP_WAKEUP_UNDEFINED) Serial.println("ESP_SLEEP_WAKEUP_UNDEFINED"); //normal reset
@@ -140,15 +167,27 @@ void setup(void){
   pinMode(LBUT, INPUT_PULLUP);
   pinMode(RBUT, INPUT_PULLUP);
   pinMode(CBUT, INPUT_PULLUP);
+  pinMode(SBUT, INPUT_PULLUP);
 
   pinMode(CRG_STAT, INPUT);
   pinMode(ADC_BAT, INPUT);
+  pinMode(INTP, INPUT_PULLUP);
   adcAttachPin(CRG_STAT);
   adcAttachPin(ADC_BAT);
   analogReadResolution(12);
   analogSetWidth(12);
   analogSetAttenuation(ADC_11db);
 
+  
+  Wire.begin(I2C_SDA, I2C_SCL, 400000);
+  mpu.initialize();
+  mpu.setXAccelOffset(-1839);
+  mpu.setYAccelOffset(893);
+  mpu.setZAccelOffset(4861);
+  mpu.setXGyroOffset(87);
+  mpu.setYGyroOffset(22);
+  mpu.setZGyroOffset(-130);
+  
   //create a task that will be executed in the Task1code() function, with priority 1 and executed on core 0
   xTaskCreatePinnedToCore(
                     Task1code,   /* Task function. */
@@ -160,22 +199,26 @@ void setup(void){
                     0);          /* pin task to core 0 */        
                               
   if(cause == ESP_SLEEP_WAKEUP_UNDEFINED){ //run on reset only
-    display.fillScreen(BLACK);
-    display.setTextSize(2);
-    display.setTextColor(WHITE);
-    display.setCursor(0, 20);
-    display.println("Memory Display OS Version 0.03");
-    display.refresh();
-    display.println("Copyright(C) 2019-2020 CoreTech");
-    display.refresh();
-    display.printf("CPU: Xtensa LX6 2 CPU %dMHz\n\n", getCpuFrequencyMhz());
-    display.refresh();
-    display.println("Fetching time from NTP server...");
-    if(syncRTC()) display.println("Time synced");
-    else display.println("Time sync failed");
-    display.refresh();
-    delay(500);
+    #if !defined SKIPBOOTSCREEN
+      display.fillScreen(BLACK);
+      display.setTextSize(2);
+      display.setTextColor(WHITE);
+      display.setCursor(0, 20);
+      display.println("Memory Display OS Version 0.06");
+      display.refresh();
+      display.println("Copyright(C) 2019-2020 CoreTech");
+      display.refresh();
+      display.printf("CPU: Xtensa LX6 2 CPU %dMHz\n\n", getCpuFrequencyMhz());
+      display.refresh();
+      display.println("Fetching time from NTP server...");
+      if(syncRTC()) display.println("Time synced");
+      else display.println("Time sync failed");
+      display.refresh();
+      delay(500);
+    #endif
   }
+
+  setMenuPos();
   
 }
 
@@ -228,46 +271,56 @@ void loop(void){
   Serial.print(fps);
   Serial.println("fps");
 
-  if(currentPage == 2) drawLunar();
-  else if(currentPage == 3) drawNews();
-  else if(currentPage == 4) drawClockApp();
-  else if(currentPage == 6) drawHackaday();
+  if(currentPage == 1) drawPaint();
+  //else if(currentPage == 2) drawSettings();
+  else if(currentPage == 3) drawCalc();
+  else if(currentPage == 4) drawNews();
+  else if(currentPage == 5) drawClockApp();
+  else if(currentPage == 6) drawLunar();
+  else if(currentPage == 7) drawKeyboardDemo();
+  //else if(currentPage == 8) drawOpac();
+  else if(currentPage == 9) drawSpiritLevel();
+  else if(currentPage == 10) drawHackaday();
   else drawMainMenu();
 }
 
 ///
 
 void drawTaskBar(){
-  display.fillRect(0, 0, display.width(), 16, BLACK);
+  display.fillRect(0, 0, WIDTH, 16, BLACK);
   //time
+  display.setFont();
   display.setTextSize(2);
   display.setTextColor(WHITE);
   //clock
-  display.setCursor(display.width()/2-26,0);
+  display.setCursor(WIDTH/2-26,0);
   display.printf("%02d:%02d", now.tm_hour, now.tm_min);
   //battery
   //display.printf("   %d", analogRead(ADC_BAT));
   display.setCursor(10,0);  
-  display.printf(" %.2fV", battVoltage);
-  display.drawRect(display.width()-30, 3, 19, 10, WHITE);
-  display.fillRect(display.width()-11, 5, 2, 6, WHITE);
+  //display.printf(" %.2fV", battVoltage);
+  display.drawRect(WIDTH-30, 3, 19, 10, WHITE);
+  display.fillRect(WIDTH-11, 5, 2, 6, WHITE);
   if(batteryConnected){
-    if(battVoltage > 3.7) display.fillRect(display.width()-28, 5, 3, 6, WHITE);
-    if(battVoltage > 3.8) display.fillRect(display.width()-24, 5, 3, 6, WHITE);
-    if(battVoltage > 3.9) display.fillRect(display.width()-20, 5, 3, 6, WHITE);
-    if(battVoltage > 4.1) display.fillRect(display.width()-16, 5, 3, 6, WHITE);
+    if(battVoltage > 3.7) display.fillRect(WIDTH-28, 5, 3, 6, WHITE);
+    if(battVoltage > 3.8) display.fillRect(WIDTH-24, 5, 3, 6, WHITE);
+    if(battVoltage > 3.9) display.fillRect(WIDTH-20, 5, 3, 6, WHITE);
+    if(battVoltage > 4.1) display.fillRect(WIDTH-16, 5, 3, 6, WHITE);
   }
   //USB
   if(USBConnected){
-    display.fillRect(display.width()-45, 5, 9, 5, WHITE);
-    display.fillRect(display.width()-44, 2, 2, 4, WHITE);
-    display.fillRect(display.width()-39, 2, 2, 4, WHITE);
-    display.fillRect(display.width()-42, 10, 3, 4, WHITE);
+    display.fillRect(WIDTH-45, 5, 9, 5, WHITE);
+    display.fillRect(WIDTH-44, 2, 2, 4, WHITE);
+    display.fillRect(WIDTH-39, 2, 2, 4, WHITE);
+    display.fillRect(WIDTH-42, 10, 3, 4, WHITE);
   }
   //fps
+  /*
   display.setCursor(10,0);
-  //display.print(fps);
-  //display.print("fps");
+  display.print(fps);
+  display.print("FPS");
+  display.setFont();
+  */
 }
 
 void grayRect(int x, int y, int w, int h) {
