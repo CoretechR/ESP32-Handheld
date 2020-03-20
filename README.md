@@ -1,6 +1,6 @@
 # ESP32-Handheld
 
-![My image](https://cdn.hackaday.io/images/7327171577179362033.JPG)
+![My image](https://cdn.hackaday.io/images/7388051584724557389.JPG)
 
 
 Using Arduino for ESP32 1.0.2
