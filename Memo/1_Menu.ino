@@ -56,9 +56,9 @@ void drawMainMenu(){
   
   display.fillScreen(WHITE);
   //grayRect(0, 16, WIDTH, HEIGHT-16);
-  drawTaskBar();
   drawAppSelect();
   drawIcons();
+  drawTaskBar();
   
   display.refresh();
   buttonA.read();

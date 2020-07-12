@@ -1,9 +1,12 @@
+// Tested with ESP32 Core V1.0.4
+//#define ANCS //uncomment to enable ANCS messages
 #include <Adafruit_GFX.h>
 #include <Adafruit_SharpMem.h>
 #include <Fonts/FreeSansBold9pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
 
 #include <Button.h> // https://github.com/JChristensen/Button
+
 #include "esp_sleep.h"
 #include "driver/rtc_io.h"
 #include "esp32/ulp.h"
@@ -20,9 +23,22 @@
 #include "MPU6050.h"
 #include "Wire.h"
 MPU6050 mpu;
+
+#ifdef ANCS
+  #include "esp32notifications.h" // https://www.github.com/Smartphone-Companions/ESP32-ANCS-Notifications.git
+  BLENotifications notifications;
+  uint32_t incomingCallNotificationUUID;
+  boolean ancsDisconnectFlag = false;
+  String latestNotificationTitle;
+  String latestNotificationMessage;
+  unsigned long notificatonCounter = 0;
+#endif
  
-const char* ssid = "yourssid";
-const char* password = "yourpassword";
+char* ssid = "SSIDA";
+char* password = "PASSWORDA";
+
+char* ssidB = "SSIDB";
+char* passwordB = "PASSWORDB";
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
@@ -83,6 +99,7 @@ float fps = 0;
 float battVoltage;
 float chargeState;
 boolean USBConnected = true;
+boolean BLEConnected = false;
 boolean Charging = false;
 boolean batteryConnected = true;
 
@@ -110,6 +127,10 @@ static void init_ulp_program()
 
 void enterSleep(){
   //Serial.printf("Entering deep sleep\n\n");
+  /* Turn off wireless features */ //needs to be tested but should be OK!
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  btStop();
   /* Put MPU6050 into sleep mode */
   mpu.setSleepEnabled(true);
   /* Start the ULP program */
@@ -196,20 +217,33 @@ void setup(void){
                     NULL,        /* parameter of the task */
                     1,           /* priority of the task */
                     &Task1,      /* Task handle to keep track of created task */
-                    0);          /* pin task to core 0 */        
-                              
+                    0);          /* pin task to core 0 */     
+
+  #ifdef ANCS
+    notifications.begin("ESP32 Memo"); // Start ANCS 
+    notifications.setConnectionStateChangedCallback(onBLEStateChanged);
+    notifications.setNotificationCallback(onNotificationArrived);
+    notifications.setRemovedCallback(onNotificationRemoved);
+  #endif
+                           
   if(cause == ESP_SLEEP_WAKEUP_UNDEFINED){ //run on reset only
     #if !defined SKIPBOOTSCREEN
       display.fillScreen(BLACK);
       display.setTextSize(2);
       display.setTextColor(WHITE);
       display.setCursor(0, 20);
-      display.println("Memory Display OS Version 0.06");
+      display.println("Memory Display OS Version 0.07");
       display.refresh();
       display.println("Copyright(C) 2019-2020 CoreTech");
       display.refresh();
       display.printf("CPU: Xtensa LX6 2 CPU %dMHz\n\n", getCpuFrequencyMhz());
       display.refresh();
+
+      if (WifiConnect(5) == false){ // switch to backup wifi
+        ssid = ssidB;
+        password = passwordB;
+      }
+      
       display.println("Fetching time from NTP server...");
       if(syncRTC()) display.println("Time synced");
       else display.println("Time sync failed");
@@ -240,6 +274,11 @@ void Task1code( void * pvParameters ){
       display.println("  Please turn off");
       display.println("  and recharge");
       display.refresh();
+      /* Put MPU6050 into sleep mode */
+      WiFi.disconnect(true);
+      WiFi.mode(WIFI_OFF);
+      btStop();
+      mpu.setSleepEnabled(true);
       esp_deep_sleep_start();
     }
     //TODO: measure V_USB in next hardware revision!
@@ -258,6 +297,14 @@ void Task1code( void * pvParameters ){
       USBConnected = false;
       batteryConnected = true;
     }
+    #ifdef ANCS
+    // Restart BLE Advertising to prevent reconnect issue
+    if(ancsDisconnectFlag) { 
+      delay(100);
+      notifications.startAdvertising();
+      ancsDisconnectFlag = false;
+    }
+    #endif
     getLocalTime(&now,0);
     delay(500); //core 0 needs free time for background tasks
   }
@@ -268,8 +315,8 @@ void loop(void){
   fpsCounter = millis();
 
   
-  Serial.print(fps);
-  Serial.println("fps");
+  //Serial.print(fps);
+  //Serial.println("fps");
 
   if(currentPage == 1) drawPaint();
   //else if(currentPage == 2) drawSettings();
@@ -314,13 +361,31 @@ void drawTaskBar(){
     display.fillRect(WIDTH-39, 2, 2, 4, WHITE);
     display.fillRect(WIDTH-42, 10, 3, 4, WHITE);
   }
-  //fps
-  /*
-  display.setCursor(10,0);
-  display.print(fps);
-  display.print("FPS");
-  display.setFont();
-  */
+  if(BLEConnected){
+    display.drawBitmap(WIDTH-57, 2, bluetooth_bmp, 6, 12, WHITE);
+  }
+  #ifdef ANCS
+    if(notificatonCounter > millis()){
+      display.fillRect(0, 16, WIDTH, 50, BLACK);
+      display.fillRoundRect(5, 16, WIDTH-(5*2), 50-5, 6, WHITE);
+      display.setCursor(8, 28);
+      display.setTextSize(1);
+      display.setTextColor(BLACK);
+  
+      display.setTextWrap(false);
+      display.setFont(&FreeSansBold9pt7b);
+      display.print(latestNotificationTitle.substring(0, 42));
+      
+      display.setCursor(8, 54);
+      display.setFont(&FreeSans9pt7b);
+      display.print(latestNotificationMessage.substring(0, 42));
+      if(latestNotificationMessage.length() >= 38) display.print("...");
+      display.setTextWrap(true);
+    
+      display.setFont();
+    }
+  #endif
+    
 }
 
 void grayRect(int x, int y, int w, int h) {
@@ -334,9 +399,9 @@ void grayRect(int x, int y, int w, int h) {
 }
 
 boolean syncRTC(){
-  if(WifiConnect(8)){
+  if(WifiConnect(5)){
     timeClient.begin();
-    timeClient.setTimeOffset(3600); //+1hr
+    timeClient.setTimeOffset(7200); //+2hr for DST
     timeClient.update();
     timeval epoch = {timeClient.getEpochTime(), 0};
     const timeval *tv = &epoch;
@@ -372,3 +437,33 @@ void drawClock(){
   display.printf("%d.%d.%d", now.tm_mday, now.tm_mon+1, now.tm_year+1900);
   display.refresh();
 }
+
+#ifdef ANCS
+  void onNotificationRemoved(const ArduinoNotification * notification, const Notification * rawNotificationData) {
+       display.printf("Removed notification: %s\n%s\n%s\n", notification->title, notification->message, notification->type);
+  }
+  
+  void onNotificationArrived(const ArduinoNotification * notification, const Notification * rawNotificationData) {
+      latestNotificationTitle = notification->title;
+      latestNotificationMessage = notification->message;    
+      display.printf("Got notification: %s\n%s\n%s\n", notification->title, notification->message, notification->type);
+      Serial.println(notifications.getNotificationCategoryDescription(notification->category));  // ie "social media"
+      Serial.println(notification->categoryCount); // How may other notifications are there from this app (ie badge number)
+      notificatonCounter = millis() + 3000;
+  }
+  
+  void onBLEStateChanged(BLENotifications::State state) {
+    switch(state) {
+        case BLENotifications::StateConnected:
+            Serial.println("StateConnected - connected to a phone or tablet");
+            BLEConnected = true;
+            break;
+  
+        case BLENotifications::StateDisconnected:
+            Serial.println("StateDisconnected - disconnected from a phone or tablet"); 
+            ancsDisconnectFlag = true;
+            BLEConnected = false;
+            break; 
+    }
+  }
+#endif

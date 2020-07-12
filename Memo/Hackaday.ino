@@ -12,6 +12,10 @@ void drawHackaday(){
     display.print("Connecting to ");
     display.println(ssid);
     display.refresh();
+    #ifdef ANCS
+    notifications.stop();
+    delay(200);
+    #endif   
 
     if(WifiConnect(8)){
       display.print("Connected\n");
@@ -52,6 +56,8 @@ void drawHackaday(){
    
       http.end(); //Free the resources
       WiFi.disconnect();
+      WiFi.mode(WIFI_OFF);
+      delay(200);
     }
     else{
       display.print("Connection failed!\n");
